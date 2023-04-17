@@ -1,1 +1,1 @@
-# commit-authors-action
+# check-pr-commits-authors-action
