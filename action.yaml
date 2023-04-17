@@ -1,0 +1,46 @@
+name: Check Pull Request Commits Authors
+description: Validate pull request commits authors by email domain
+inputs:
+  EMAIL_DOMAIN:
+    description: Email domain to be checked. For example: @email-domain.com
+    required: true
+  GITHUB_TOKEN:
+    description: Github token to access the repository infos.
+    required: true
+runs:
+  env:
+    GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+  - uses: octokit/request-action@v2.x
+    id: get-commits
+    if: ${{ github.event_name == 'pull_request' }}
+    with:
+      route: GET /repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits
+      accept-header: application/vnd.github+json
+  - name: "Checking commits authors email domain"
+    env:
+        COMMITS: ${{ steps.get-commits.outputs.data }}
+    run: |
+      required_email_domain=${{ inputs.EMAIL_DOMAIN }}
+      invalid_commits=0
+      for COMMIT in $(echo $COMMITS | jq -r '.[] | @base64'); do
+          _jq() {
+            echo ${COMMIT} | base64 --decode | jq -r ${1}
+          }
+          COMMIT_HASH=$(_jq '.sha')
+          COMMIT_MESSAGE=$(_jq '.commit.message')
+          COMMIT_AUTHOR=$(_jq '.commit.author.email')
+
+          echo "Cheking commit: $COMMIT_HASH"
+          echo "    Commit message: \"$COMMIT_MESSAGE\""
+          author_email_domain=${COMMIT_AUTHOR#*@}
+          if [ $author_email_domain != $required_email_domain ]; then
+              echo "    ❌ Invalid Author Email: $COMMIT_AUTHOR. Use a \`$required_email_domain\` domain email."
+              echo "    See the commit here: https://github.com/${{ github.repository }}/pull/${{ github.event.number }}/commits/$COMMIT_HASH"
+              invalid_commits=$((invalid_commits+1))
+          else
+              echo "    ✅ Valid Author Email: $COMMIT_AUTHOR"
+          fi
+      done
+      if [ $invalid_commits -gt 0 ]; then
+          exit 1
+      fi
