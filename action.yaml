@@ -1,0 +1,58 @@
+name: Check Pull Request Commits Authors
+description: Validate pull request commits authors by email domain
+inputs:
+  EMAIL_PATTERN:
+    description: "Required email pattern."
+    required: true
+  IGNORED_EMAIL_PATTERN:
+    descriptionL: "Email pattern to be ignored on check."
+    required: false
+runs:
+  using: 'composite'
+  steps:
+    - name: "Check if it's any pull request related event"
+      id: check-event
+      if: ${{ !startsWith(github.event_name, 'pull_request') }}
+      shell: bash
+      run: |
+        echo "☑️ Skipping because it's not a pull request related event. Current event: '${{ github.event_name }}'"
+        echo "pass=true" >> $GITHUB_OUTPUT
+    - uses: octokit/request-action@v2.x
+      id: get-commits
+      if: ${{ steps.check-event.outputs.pass != 'true' }}
+      with:
+        route: GET /repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits
+    - name: "Checking commits authors email pattern"
+      id: check-pr-commits-authors
+      if: ${{ steps.check-event.outputs.pass != 'true' }}
+      env:
+        COMMITS: ${{ steps.get-commits.outputs.data }}
+      shell: bash
+      run: |
+        required_email_pattern="${{ inputs.EMAIL_PATTERN }}"
+        ignored_email_pattern="${{ inputs.IGNORED_EMAIL_PATTERN }}"
+        has_invalid_commits=false
+        for COMMIT in $(echo "$COMMITS" | jq -r '.[] | @base64'); do
+            _jq() {
+              echo "${COMMIT}" | base64 --decode | jq -r "${1}"
+            }
+            COMMIT_HASH=$(_jq '.sha')
+            COMMIT_MESSAGE=$(_jq '.commit.message' | sed '/^$/q')
+            COMMIT_AUTHOR=$(_jq '.commit.author.email')
+
+            echo "Cheking commit: $COMMIT_HASH"
+            echo "    Commit message: \"$COMMIT_MESSAGE\""
+            if [ -n "$ignored_email_pattern" ] && echo "$COMMIT_AUTHOR" | grep -Eq "$ignored_email_pattern" > /dev/null; then
+                echo "    ⚠️ Skipping Author Email: $COMMIT_AUTHOR. Ignored email pattern:\`$ignored_email_pattern\`"
+            elif echo "$COMMIT_AUTHOR" | grep -Eqv "$required_email_pattern" > /dev/null; then
+                echo "    ❌ Invalid Author Email: $COMMIT_AUTHOR. Use a \`$required_email_pattern\` pattern email."
+                echo "    See the commit here: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}/commits/$COMMIT_HASH"
+                has_invalid_commits=true
+            else
+                echo "    ✅ Valid Author Email: $COMMIT_AUTHOR"
+            fi
+        done
+        if [ "$has_invalid_commits" = true ]; then
+            exit 1
+        fi
+        exit 0
